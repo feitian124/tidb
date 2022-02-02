@@ -91,7 +91,7 @@ func TestSingleSessionInsert(t *testing.T) {
 	require.Equal(t, int64(rowCount1*2), stats1.Count)
 
 	// Test IncreaseFactor.
-	count, err := stats1.ColumnEqualRowCount(testKit.Session().GetSessionVars().StmtCtx, types.NewIntDatum(1), tableInfo1.Columns[0].ID)
+	count, err := stats1.ColumnEqualRowCount(testKit.Session(), types.NewIntDatum(1), tableInfo1.Columns[0].ID)
 	require.NoError(t, err)
 	require.Equal(t, float64(rowCount1*2), count)
 
@@ -702,10 +702,10 @@ func TestSplitRange(t *testing.T) {
 		ranges := make([]*ranger.Range, 0, len(tt.points)/2)
 		for i := 0; i < len(tt.points); i += 2 {
 			ranges = append(ranges, &ranger.Range{
-				LowVal:      []types.Datum{types.NewIntDatum(t.points[i])},
-				LowExclude:  t.exclude[i],
-				HighVal:     []types.Datum{types.NewIntDatum(t.points[i+1])},
-				HighExclude: t.exclude[i+1],
+				LowVal:      []types.Datum{types.NewIntDatum(tt.points[i])},
+				LowExclude:  tt.exclude[i],
+				HighVal:     []types.Datum{types.NewIntDatum(tt.points[i+1])},
+				HighExclude: tt.exclude[i+1],
 				Collators:   collate.GetBinaryCollatorSlice(1),
 			})
 		}
@@ -1883,9 +1883,9 @@ func TestFeedbackCounter(t *testing.T) {
 	require.Equal(t, 20, subtraction(newNum, oldNum))
 }
 
-func (s *testSerialStatsSuite) TestDumpColumnStatsUsage(c *C) {
-	defer cleanEnv(c, s.store, s.do)
-	tk := testkit.NewTestKit(c, s.store)
+func TestDumpColumnStatsUsage(t *testing.T) {
+	tk, dom, clean := createTestKitAndDom(t)
+	defer clean()
 
 	originalVal := tk.MustQuery("select @@tidb_enable_column_tracking").Rows()[0][0].(string)
 	defer func() {
@@ -1893,7 +1893,7 @@ func (s *testSerialStatsSuite) TestDumpColumnStatsUsage(c *C) {
 	}()
 	tk.MustExec("set global tidb_enable_column_tracking = 1")
 
-	h := s.do.StatsHandle()
+	h := dom.StatsHandle()
 	tk.MustExec("use test")
 	tk.MustExec("create table t1(a int, b int)")
 	tk.MustExec("create table t2(a int, b int)")
@@ -1903,32 +1903,32 @@ func (s *testSerialStatsSuite) TestDumpColumnStatsUsage(c *C) {
 	tk.MustExec("insert into t3 values (1, 2), (3, 4), (11, 12), (13, 14)")
 	tk.MustExec("select * from t1 where a > 1")
 	tk.MustExec("select * from t2 where b < 10")
-	c.Assert(h.DumpColStatsUsageToKV(), IsNil)
+	require.Nil(t, h.DumpColStatsUsageToKV())
 	// t1.a is collected as predicate column
 	rows := tk.MustQuery("show column_stats_usage where db_name = 'test' and table_name = 't1'").Rows()
-	c.Assert(len(rows), Equals, 1)
-	c.Assert(rows[0][:4], DeepEquals, []interface{}{"test", "t1", "", "a"})
-	c.Assert(rows[0][4].(string) != "<nil>", IsTrue)
-	c.Assert(rows[0][5].(string) == "<nil>", IsTrue)
+	require.Equal(t, 1, len(rows))
+	require.Equal(t, []interface{}{"test", "t1", "", "a"}, rows[0][:4])
+	require.True(t, rows[0][4].(string) != "<nil>")
+	require.True(t, rows[0][5].(string) == "<nil>")
 	rows = tk.MustQuery("show column_stats_usage where db_name = 'test' and table_name = 't2'").Rows()
-	c.Assert(len(rows), Equals, 1)
-	c.Assert(rows[0][:4], DeepEquals, []interface{}{"test", "t2", "", "b"})
-	c.Assert(rows[0][4].(string) != "<nil>", IsTrue)
-	c.Assert(rows[0][5].(string) == "<nil>", IsTrue)
+	require.Equal(t, 1, len(rows))
+	require.Equal(t, []interface{}{"test", "t2", "", "b"}, rows[0][:4])
+	require.True(t, rows[0][4].(string) != "<nil>")
+	require.True(t, rows[0][5].(string) == "<nil>")
 
 	tk.MustExec("analyze table t1")
 	tk.MustExec("select * from t1 where b > 1")
-	c.Assert(h.DumpColStatsUsageToKV(), IsNil)
+	require.Nil(t, h.DumpColStatsUsageToKV())
 	// t1.a updates last_used_at first and then updates last_analyzed_at while t1.b updates last_analyzed_at first and then updates last_used_at.
 	// Check both of them behave as expected.
 	rows = tk.MustQuery("show column_stats_usage where db_name = 'test' and table_name = 't1'").Rows()
-	c.Assert(len(rows), Equals, 2)
-	c.Assert(rows[0][:4], DeepEquals, []interface{}{"test", "t1", "", "a"})
-	c.Assert(rows[0][4].(string) != "<nil>", IsTrue)
-	c.Assert(rows[0][5].(string) != "<nil>", IsTrue)
-	c.Assert(rows[1][:4], DeepEquals, []interface{}{"test", "t1", "", "b"})
-	c.Assert(rows[1][4].(string) != "<nil>", IsTrue)
-	c.Assert(rows[1][5].(string) != "<nil>", IsTrue)
+	require.Equal(t, 2, len(rows))
+	require.Equal(t, []interface{}{"test", "t1", "", "a"}, rows[0][:4])
+	require.True(t, rows[0][4].(string) != "<nil>")
+	require.True(t, rows[0][5].(string) != "<nil>")
+	require.Equal(t, []interface{}{"test", "t1", "", "b"}, rows[1][:4])
+	require.True(t, rows[1][4].(string) != "<nil>")
+	require.True(t, rows[1][5].(string) != "<nil>")
 
 	// Test partition table.
 	// No matter whether it is static or dynamic pruning mode, we record predicate columns using table ID rather than partition ID.
@@ -1936,12 +1936,12 @@ func (s *testSerialStatsSuite) TestDumpColumnStatsUsage(c *C) {
 		tk.MustExec(fmt.Sprintf("set @@tidb_partition_prune_mode = '%v'", val))
 		tk.MustExec("delete from mysql.column_stats_usage")
 		tk.MustExec("select * from t3 where a < 5")
-		c.Assert(h.DumpColStatsUsageToKV(), IsNil)
+		require.Nil(t, h.DumpColStatsUsageToKV())
 		rows = tk.MustQuery("show column_stats_usage where db_name = 'test' and table_name = 't3'").Rows()
-		c.Assert(len(rows), Equals, 1)
-		c.Assert(rows[0][:4], DeepEquals, []interface{}{"test", "t3", "global", "a"})
-		c.Assert(rows[0][4].(string) != "<nil>", IsTrue)
-		c.Assert(rows[0][5].(string) == "<nil>", IsTrue)
+		require.Equal(t, 1, len(rows))
+		require.Equal(t, []interface{}{"test", "t3", "global", "a"}, rows[0][:4])
+		require.True(t, rows[0][4].(string) != "<nil>")
+		require.True(t, rows[0][5].(string) == "<nil>")
 	}
 
 	// Test non-correlated subquery.
@@ -1949,20 +1949,20 @@ func (s *testSerialStatsSuite) TestDumpColumnStatsUsage(c *C) {
 	// Hence we put the test of collecting predicate columns for non-correlated subquery here.
 	tk.MustExec("delete from mysql.column_stats_usage")
 	tk.MustExec("select * from t2 where t2.a > (select count(*) from t1 where t1.b > 1)")
-	c.Assert(h.DumpColStatsUsageToKV(), IsNil)
+	require.Nil(t, h.DumpColStatsUsageToKV())
 	rows = tk.MustQuery("show column_stats_usage where db_name = 'test' and table_name = 't1'").Rows()
-	c.Assert(len(rows), Equals, 1)
-	c.Assert(rows[0][:4], DeepEquals, []interface{}{"test", "t1", "", "b"})
-	c.Assert(rows[0][4].(string) != "<nil>", IsTrue)
-	c.Assert(rows[0][5].(string) == "<nil>", IsTrue)
+	require.Equal(t, 1, len(rows))
+	require.Equal(t, []interface{}{"test", "t1", "", "b"}, rows[0][:4])
+	require.True(t, rows[0][4].(string) != "<nil>")
+	require.True(t, rows[0][5].(string) == "<nil>")
 	rows = tk.MustQuery("show column_stats_usage where db_name = 'test' and table_name = 't2'").Rows()
-	c.Assert(len(rows), Equals, 1)
-	c.Assert(rows[0][:4], DeepEquals, []interface{}{"test", "t2", "", "a"})
-	c.Assert(rows[0][4].(string) != "<nil>", IsTrue)
-	c.Assert(rows[0][5].(string) == "<nil>", IsTrue)
+	require.Equal(t, 1, len(rows))
+	require.Equal(t, []interface{}{"test", "t2", "", "a"}, rows[0][:4])
+	require.True(t, rows[0][4].(string) != "<nil>")
+	require.True(t, rows[0][5].(string) == "<nil>")
 }
 
-func (s *testSerialStatsSuite) TestCollectPredicateColumnsFromExecute(c *C) {
+func TestCollectPredicateColumnsFromExecute(t *testing.T) {
 	for _, val := range []bool{false, true} {
 		func(planCache bool) {
 			originalVal1 := plannercore.PreparedPlanCacheEnabled()
@@ -1971,8 +1971,8 @@ func (s *testSerialStatsSuite) TestCollectPredicateColumnsFromExecute(c *C) {
 			}()
 			plannercore.SetPreparedPlanCache(planCache)
 
-			defer cleanEnv(c, s.store, s.do)
-			tk := testkit.NewTestKit(c, s.store)
+			tk, dom, clean := createTestKitAndDom(t)
+			defer clean()
 
 			originalVal2 := tk.MustQuery("select @@tidb_enable_column_tracking").Rows()[0][0].(string)
 			defer func() {
@@ -1980,47 +1980,47 @@ func (s *testSerialStatsSuite) TestCollectPredicateColumnsFromExecute(c *C) {
 			}()
 			tk.MustExec("set global tidb_enable_column_tracking = 1")
 
-			h := s.do.StatsHandle()
+			h := dom.StatsHandle()
 			tk.MustExec("use test")
 			tk.MustExec("create table t1(a int, b int)")
 			tk.MustExec("prepare stmt from 'select * from t1 where a > ?'")
-			c.Assert(h.DumpColStatsUsageToKV(), IsNil)
+			require.Nil(t, h.DumpColStatsUsageToKV())
 			// Prepare only converts sql string to ast and doesn't do optimization, so no predicate column is collected.
 			tk.MustQuery("show column_stats_usage where db_name = 'test' and table_name = 't1'").Check(testkit.Rows())
 			tk.MustExec("set @p1 = 1")
 			tk.MustExec("execute stmt using @p1")
-			c.Assert(h.DumpColStatsUsageToKV(), IsNil)
+			require.Nil(t, h.DumpColStatsUsageToKV())
 			rows := tk.MustQuery("show column_stats_usage where db_name = 'test' and table_name = 't1'").Rows()
-			c.Assert(len(rows), Equals, 1)
-			c.Assert(rows[0][:4], DeepEquals, []interface{}{"test", "t1", "", "a"})
-			c.Assert(rows[0][4].(string) != "<nil>", IsTrue)
-			c.Assert(rows[0][5].(string) == "<nil>", IsTrue)
+			require.Equal(t, 1, len(rows))
+			require.Equal(t, []interface{}{"test", "t1", "", "a"}, rows[0][:4])
+			require.True(t, rows[0][4].(string) != "<nil>")
+			require.True(t, rows[0][5].(string) == "<nil>")
 
 			tk.MustExec("delete from mysql.column_stats_usage")
 			tk.MustExec("set @p2 = 2")
 			tk.MustExec("execute stmt using @p2")
 			if planCache {
 				tk.MustQuery("select @@last_plan_from_cache").Check(testkit.Rows("1"))
-				c.Assert(h.DumpColStatsUsageToKV(), IsNil)
+				require.Nil(t, h.DumpColStatsUsageToKV())
 				// If the second execution uses the cached plan, no predicate column is collected.
 				tk.MustQuery("show column_stats_usage where db_name = 'test' and table_name = 't1'").Check(testkit.Rows())
 			} else {
 				tk.MustQuery("select @@last_plan_from_cache").Check(testkit.Rows("0"))
-				c.Assert(h.DumpColStatsUsageToKV(), IsNil)
+				require.Nil(t, h.DumpColStatsUsageToKV())
 				rows = tk.MustQuery("show column_stats_usage where db_name = 'test' and table_name = 't1'").Rows()
-				c.Assert(len(rows), Equals, 1)
-				c.Assert(rows[0][:4], DeepEquals, []interface{}{"test", "t1", "", "a"})
-				c.Assert(rows[0][4].(string) != "<nil>", IsTrue)
-				c.Assert(rows[0][5].(string) == "<nil>", IsTrue)
+				require.Equal(t, 1, len(rows))
+				require.Equal(t, []interface{}{"test", "t1", "", "a"}, rows[0][:4])
+				require.True(t, rows[0][4].(string) != "<nil>")
+				require.True(t, rows[0][5].(string) == "<nil>")
 			}
 		}(val)
 	}
 }
 
-func (s *testSerialStatsSuite) TestEnableAndDisableColumnTracking(c *C) {
-	defer cleanEnv(c, s.store, s.do)
-	tk := testkit.NewTestKit(c, s.store)
-	h := s.do.StatsHandle()
+func TestEnableAndDisableColumnTracking(t *testing.T) {
+	tk, dom, clean := createTestKitAndDom(t)
+	defer clean()
+	h := dom.StatsHandle()
 	tk.MustExec("use test")
 	tk.MustExec("drop table if exists t")
 	tk.MustExec("create table t (a int, b int, c int)")
@@ -2032,10 +2032,10 @@ func (s *testSerialStatsSuite) TestEnableAndDisableColumnTracking(c *C) {
 
 	tk.MustExec("set global tidb_enable_column_tracking = 1")
 	tk.MustExec("select * from t where b > 1")
-	c.Assert(h.DumpColStatsUsageToKV(), IsNil)
+	require.Nil(t, h.DumpColStatsUsageToKV())
 	rows := tk.MustQuery("show column_stats_usage where db_name = 'test' and table_name = 't' and last_used_at is not null").Rows()
-	c.Assert(len(rows), Equals, 1)
-	c.Assert(rows[0][3], Equals, "b")
+	require.Equal(t, 1, len(rows))
+	require.Equal(t, "b", rows[0][3])
 
 	tk.MustExec("set global tidb_enable_column_tracking = 0")
 	// After tidb_enable_column_tracking is set to 0, the predicate columns collected before are invalidated.
@@ -2044,17 +2044,17 @@ func (s *testSerialStatsSuite) TestEnableAndDisableColumnTracking(c *C) {
 	// Sleep for 1.5s to let `last_used_at` be larger than `tidb_disable_tracking_time`.
 	time.Sleep(1500 * time.Millisecond)
 	tk.MustExec("select * from t where a > 1")
-	c.Assert(h.DumpColStatsUsageToKV(), IsNil)
+	require.Nil(t, h.DumpColStatsUsageToKV())
 	// We don't collect predicate columns when tidb_enable_column_tracking = 0
 	tk.MustQuery("show column_stats_usage where db_name = 'test' and table_name = 't' and last_used_at is not null").Check(testkit.Rows())
 
 	tk.MustExec("set global tidb_enable_column_tracking = 1")
 	tk.MustExec("select * from t where b < 1 and c > 1")
-	c.Assert(h.DumpColStatsUsageToKV(), IsNil)
+	require.Nil(t, h.DumpColStatsUsageToKV())
 	rows = tk.MustQuery("show column_stats_usage where db_name = 'test' and table_name = 't' and last_used_at is not null").Sort().Rows()
-	c.Assert(len(rows), Equals, 2)
-	c.Assert(rows[0][3], Equals, "b")
-	c.Assert(rows[1][3], Equals, "c")
+	require.Equal(t, 2, len(rows))
+	require.Equal(t, "b", rows[0][3])
+	require.Equal(t, "c", rows[1][3])
 
 	// Test invalidating predicate columns again in order to check that tidb_disable_tracking_time can be updated.
 	tk.MustExec("set global tidb_enable_column_tracking = 0")
